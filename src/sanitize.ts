@@ -1,8 +1,10 @@
 import {
   CURRENCY_MAX, REBIRTHS_MAX, DISTANCE_MAX, PLAY_SECONDS_MAX, OWNED_MAX, PETS_MAX, PET_TIERS_MAX,
   PET_SLOTS_MAX, GIFTS_MAX, POTION_KINDS_MAX, POTION_COUNT_MAX, ID_PATTERN,
+  HOTBAR_MAX, BACKPACK_MAX, BASE_SLOTS_MAX, FIGHTER_NAME_MAX, FIGHTER_ID_MAX, SLOT_LEVEL_MAX,
+  INDEX_KEY, INDEX_MAX, BOOST_MAX_MS,
 } from "./constants.js";
-import type { PlayerDoc, SavedPet } from "./db.js";
+import type { PlayerDoc, SavedFighter, SavedLook, SavedPet, SavedSlot } from "./db.js";
 
 export function finite(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v);
@@ -51,6 +53,66 @@ function sanitizePotions(raw: unknown): Record<string, number> {
   return out;
 }
 
+// --- Be a Dragon Ball fighters ---------------------------------------------------------------
+const COLOR = /^#[0-9a-fA-F]{6}$/;
+const LABEL = /^[A-Za-z][A-Za-z ]{0,23}$/; // rarity / mutation names ("Common", "Golden"...)
+const color = (v: unknown, fallback: string) => (typeof v === "string" && COLOR.test(v) ? v : fallback);
+const small = (v: unknown) => (finite(v) ? clampInt(v, 9) : 0);
+
+function sanitizeLook(raw: unknown): SavedLook {
+  const l = isObject(raw) ? raw : {};
+  return {
+    gi: color(l.gi, "#ff7a1a"),
+    pants: color(l.pants, "#1f5ed8"),
+    hair: color(l.hair, "#111318"),
+    skin: color(l.skin, "#f2c79a"),
+    belt: color(l.belt, "#1d2a44"),
+    boots: color(l.boots, "#1f5ed8"),
+    style: small(l.style),
+    stance: small(l.stance),
+    cape: l.cape === true,
+  };
+}
+
+// One fighter, or null when it is not one (no name / rarity / income).
+export function sanitizeFighter(raw: unknown): SavedFighter | null {
+  if (!isObject(raw)) return null;
+  if (!finite(raw.id) || typeof raw.name !== "string" || typeof raw.rarity !== "string" || !LABEL.test(raw.rarity) || !finite(raw.income)) return null;
+  const name = raw.name.slice(0, FIGHTER_NAME_MAX).trim();
+  if (!name) return null;
+  return {
+    id: clampInt(raw.id, FIGHTER_ID_MAX),
+    name,
+    rarity: raw.rarity,
+    mutation: typeof raw.mutation === "string" && LABEL.test(raw.mutation) ? raw.mutation : null,
+    income: clampNum(raw.income, CURRENCY_MAX),
+    look: sanitizeLook(raw.look),
+  };
+}
+
+export function sanitizeFighters(raw: unknown, max: number): SavedFighter[] {
+  if (!Array.isArray(raw)) return [];
+  const out: SavedFighter[] = [];
+  for (const f of raw) {
+    if (out.length >= max) break;
+    const s = sanitizeFighter(f);
+    if (s) out.push(s);
+  }
+  return out;
+}
+
+export function sanitizeSlots(raw: unknown): SavedSlot[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, BASE_SLOTS_MAX).map((s) => {
+    const o = isObject(s) ? s : {};
+    return {
+      fighter: sanitizeFighter(o.fighter),
+      level: finite(o.level) ? clampInt(o.level, SLOT_LEVEL_MAX, 1) : 1,
+      stored: finite(o.stored) ? clampNum(o.stored, CURRENCY_MAX) : 0,
+    };
+  });
+}
+
 // One owned list + its equipped id. The equipped one must be owned ("" = none); when this save
 // doesn't carry the list, trust the id's shape only.
 function ownedPair(raw: Record<string, unknown>, out: Partial<PlayerDoc>, listKey: "boats" | "engines" | "partners" | "trails", idKey: "boat" | "engine" | "partner" | "trail") {
@@ -95,5 +157,27 @@ export function sanitizeProgress(raw: unknown): Partial<PlayerDoc> | null {
     out.giftsClaimed = [...new Set(claimed)];
   }
   if (raw.potions !== undefined) out.potions = sanitizePotions(raw.potions);
+
+  // Be a Dragon Ball.
+  if (finite(raw.money)) out.money = clampNum(raw.money, CURRENCY_MAX);
+  if (finite(raw.speed)) out.speed = clampNum(raw.speed, CURRENCY_MAX);
+  if (finite(raw.nextId)) out.nextId = clampInt(raw.nextId, FIGHTER_ID_MAX, 1);
+  if (raw.inventory !== undefined) out.inventory = sanitizeFighters(raw.inventory, HOTBAR_MAX);
+  if (raw.backpack !== undefined) out.backpack = sanitizeFighters(raw.backpack, BACKPACK_MAX);
+  if (raw.slots !== undefined) out.slots = sanitizeSlots(raw.slots);
+
+  // Windows (client src/ui/): Index discoveries + collection rewards, timed boosts, Settings.
+  if (raw.discovered !== undefined) {
+    const keys = Array.isArray(raw.discovered) ? raw.discovered.filter((k): k is string => typeof k === "string" && INDEX_KEY.test(k)) : [];
+    out.discovered = [...new Set(keys)].slice(0, INDEX_MAX);
+  }
+  if (raw.indexClaimed !== undefined) out.indexClaimed = sanitizeIds(raw.indexClaimed, 64);
+  const boostCap = Date.now() + BOOST_MAX_MS;
+  if (finite(raw.speedBoostUntil)) out.speedBoostUntil = clampInt(raw.speedBoostUntil, boostCap);
+  if (finite(raw.luckBoostUntil)) out.luckBoostUntil = clampInt(raw.luckBoostUntil, boostCap);
+  if (isObject(raw.settings)) {
+    const s = raw.settings;
+    out.settings = { lowGfx: s.lowGfx === true, noVfx: s.noVfx === true, muteMusic: s.muteMusic === true, names: s.names !== false };
+  }
   return out;
 }

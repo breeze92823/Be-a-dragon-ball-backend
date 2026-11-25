@@ -36,6 +36,13 @@ export interface PlayerDoc {
   giftsClaimed?: number[]; // GIFTS.list indexes claimed this round
   potions?: Record<string, number>; // potion id -> count (gifts.js)
   lastSeen?: number; // epoch ms of the last activity
+  // Be a Dragon Ball (client src/state.js snapshot()):
+  money?: number; // $ (the HUD's cash counter)
+  speed?: number; // Speed stat (treadmills raise it; the lane orb's pace)
+  inventory?: SavedFighter[]; // the hotbar, keys 1-9 then 0 (at most HOTBAR_MAX)
+  backpack?: SavedFighter[]; // fighters in the Backpack (at most BACKPACK_MAX)
+  slots?: SavedSlot[]; // your base's slots, in order
+  nextId?: number; // next fighter id the client hands out
   // Spin wheel (spin.ts): written only by the server's `spin` handler, never by saveProgress.
   spins?: number; // spins ready to use
   spinAt?: number; // epoch ms the next free spin arrives
@@ -43,6 +50,17 @@ export interface PlayerDoc {
   dailyDay?: number; // days unlocked this cycle
   dailyLast?: number; // UTC day index of the last unlock
   dailyClaimed?: number[]; // claimed day indexes this cycle
+  // --- Be a Dragon Ball windows (client src/ui/, fields in src/state.js) ---
+  discovered?: string[]; // Index entries ever owned, "mutation.name" (INDEX_KEY)
+  indexClaimed?: string[]; // mutation ids whose Index collection reward (a base skin) is unlocked
+  speedBoostUntil?: number; // epoch ms the x2 Speed boost ends (0 = none)
+  luckBoostUntil?: number; // epoch ms the x2 Luck boost ends
+  settings?: SavedSettings; // the Settings window's toggles
+  // Playtime Rewards (playtime.ts) and Daily Quests (quests.ts): written by the server only.
+  ptDay?: number; // UTC day of the playtime clock
+  ptSecs?: number; // seconds online that day
+  ptClaimed?: number[]; // claimed reward indexes that day
+  quests?: { day: number; list: { kind: any; goal: number; n: number; rerolled: boolean }[]; claimed: boolean };
   version: number;
   updatedAt: Date;
 }
@@ -53,6 +71,41 @@ export interface SavedPet {
   tier: number;
   equipped: boolean;
   locked: boolean;
+}
+
+// A fighter (client lane/index.js rollFighter): look = the figurine's colours and poses.
+export interface SavedFighter {
+  id: number;
+  name: string;
+  rarity: string;
+  mutation: string | null;
+  income: number; // $ per second
+  look: SavedLook;
+}
+export interface SavedLook {
+  gi: string;
+  pants: string;
+  hair: string;
+  skin: string;
+  belt: string;
+  boots: string;
+  style: number;
+  stance: number;
+  cape: boolean;
+}
+// A base slot: the placed fighter (or null), its upgrade level and the cash waiting on its pad.
+export interface SavedSlot {
+  fighter: SavedFighter | null;
+  level: number;
+  stored: number;
+}
+
+// Settings window toggles (client src/ui/settings.js).
+export interface SavedSettings {
+  lowGfx: boolean;
+  noVfx: boolean;
+  muteMusic: boolean;
+  names: boolean;
 }
 
 let client: MongoClient | null = null;

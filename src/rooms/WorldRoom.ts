@@ -1,10 +1,12 @@
 import { Room, Client, CloseCode } from "colyseus";
 import { WorldState, PlayerState } from "./schema/WorldState.js";
-import { DISTANCE_MAX, GUEST_ID_PREFIX, LEADERBOARD_EVERY_MS, NAME_MAX, PFP_MAX_LEN, RECONNECT_SECONDS, ROOM_MAX_CLIENTS } from "../constants.js";
+import { DISTANCE_MAX, GUEST_ID_PREFIX, LEADERBOARD_EVERY_MS, NAME_MAX, PFP_MAX_LEN, QUEST_TICK_MS, RECONNECT_SECONDS, ROOM_MAX_CLIENTS } from "../constants.js";
 import { getPlayers, type PlayerDoc } from "../db.js";
 import { sanitizeProgress } from "../sanitize.js";
 import { accrue, rollWedge, spinStateFrom, type SpinState } from "../spin.js";
-import { claimDaily, dailyFields, dailyView, readDaily, rollDaily, type DailyState } from "../daily.js";
+import { claimDaily, dailyFields, dailyView, readDaily, rollDaily, utcDay, type DailyState } from "../daily.js";
+import { bankPlaytime, claimPlaytime, playtimeFields, playtimeView, readPlaytime, rollPlaytime, type PlaytimeState } from "../playtime.js";
+import { addQuestProgress, claimQuests, questFields, questView, readQuests, rerollQuest, rollQuests, type QuestState } from "../quests.js";
 import { applyAvatar, applyLoadout, applyPose } from "../presence.js";
 import { ranksOf, topBoards } from "../leaderboard.js";
 
@@ -42,6 +44,10 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   // sessionId -> Daily Reward state (daily.ts), read with the save. Guests and serverless sessions
   // keep theirs here only (like the rest of their progress, it lasts the session).
   private dailies = new Map<string, DailyState>();
+  // sessionId -> Playtime Rewards clock (playtime.ts) and Daily Quests (quests.ts), read with the
+  // save. Like the Daily Reward, guests / serverless sessions keep them for the connection only.
+  private playtimes = new Map<string, PlaytimeState>();
+  private questStates = new Map<string, QuestState>();
 
   messages = {
     // Debounced push of the client's whole progress. Upserts, so a first save creates the document.
@@ -91,6 +97,63 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       if (!s || !this.loaded.has(client.sessionId)) return;
       if (rollDaily(s)) void this.saveDaily(client.sessionId, s);
       client.send("daily", dailyView(s));
+    },
+    // Playtime Rewards: claims reward `msg.i` once the server's clock says it is unlocked.
+    // Answers `playtimeResult` { ok, i, reason?: "loading" | "locked" | "save", ...view }.
+    claimPlaytime: async (client: Client, msg: { i?: unknown }) => {
+      const s = this.playtimes.get(client.sessionId);
+      const i = msg?.i;
+      if (!s || !this.loaded.has(client.sessionId)) return client.send("playtimeResult", { ok: false, i, reason: "loading" });
+      const now = Date.now();
+      rollPlaytime(s, now);
+      if (!claimPlaytime(s, i, now)) return client.send("playtimeResult", { ok: false, i, reason: "locked", ...playtimeView(s, now) });
+      if (!(await this.saveFields(client.sessionId, playtimeFields(s, now)))) {
+        s.claimed = s.claimed.filter((c) => c !== i);
+        return client.send("playtimeResult", { ok: false, i, reason: "save", ...playtimeView(s) });
+      }
+      client.send("playtimeResult", { ok: true, i, ...playtimeView(s) });
+    },
+    // Daily Quests progress the client saw happen: { kind: "hatch" | "mutated" | "sell", n }.
+    // (`play` minutes are counted here, see onCreate.) Answers `quests` when something moved.
+    questEvent: (client: Client, msg: { kind?: unknown; n?: unknown }) => {
+      const s = this.questStates.get(client.sessionId);
+      if (!s || !this.loaded.has(client.sessionId) || msg?.kind === "play") return;
+      if (rollQuests(s)) void this.saveFields(client.sessionId, questFields(s));
+      if (!addQuestProgress(s, msg?.kind, msg?.n)) return;
+      void this.saveFields(client.sessionId, questFields(s));
+      client.send("quests", questView(s));
+    },
+    // { action: "reroll", i } swaps an unfinished quest (once per quest a day); { action: "claim",
+    // skip } takes today's reward (skip = the client paid $ instead of finishing). Answers
+    // `questResult` { ok, action, i?, reason?, ...view }.
+    questAction: async (client: Client, msg: { action?: unknown; i?: unknown; skip?: unknown }) => {
+      const s = this.questStates.get(client.sessionId);
+      const action = msg?.action === "claim" ? "claim" : "reroll";
+      if (!s || !this.loaded.has(client.sessionId)) return client.send("questResult", { ok: false, action, i: msg?.i, reason: "loading" });
+      rollQuests(s);
+      const before = questFields(s).quests;
+      const ok = action === "claim" ? claimQuests(s, msg?.skip) : rerollQuest(s, msg?.i);
+      if (!ok) return client.send("questResult", { ok: false, action, i: msg?.i, reason: "locked", ...questView(s) });
+      if (!(await this.saveFields(client.sessionId, questFields(s)))) {
+        Object.assign(s, before); // not stored: not done
+        return client.send("questResult", { ok: false, action, i: msg?.i, reason: "save", ...questView(s) });
+      }
+      client.send("questResult", { ok: true, action, i: msg?.i, ...questView(s) });
+    },
+    // The windows (re)attached after the load answered: send the playtime / quests / daily views.
+    uiSync: (client: Client) => {
+      if (!this.loaded.has(client.sessionId)) return;
+      const now = Date.now();
+      const pt = this.playtimes.get(client.sessionId);
+      const q = this.questStates.get(client.sessionId);
+      const d = this.dailies.get(client.sessionId);
+      if (pt) client.send("playtime", playtimeView(pt, now));
+      if (q) client.send("quests", questView(q, now));
+      if (d) client.send("daily", dailyView(d, now));
+    },
+    // The client's countdown reached the next UTC day: new quests + a fresh playtime clock.
+    dayRefresh: (client: Client) => {
+      if (this.loaded.has(client.sessionId)) this.rollDay(client);
     },
     // Spin wheel: uses one spin and rolls the prize here, so the client can't choose it. Answers
     // `spinResult` { ok, id (SPIN_WEDGES id), spins, nextAt, serverTime } or { ok: false, reason }.
@@ -146,6 +209,38 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     this.clock.setInterval(() => {
       for (const c of this.clients) void this.sendLeaderboard(c);
     }, LEADERBOARD_EVERY_MS);
+    // Every minute online: the `play` quests move, the playtime clock is banked (so a crash loses at
+    // most a minute), and a UTC midnight passed meanwhile starts the new day.
+    this.clock.setInterval(() => {
+      for (const c of this.clients) this.minuteTick(c);
+    }, QUEST_TICK_MS);
+  }
+
+  private minuteTick(client: Client) {
+    const sid = client.sessionId;
+    const q = this.questStates.get(sid);
+    const pt = this.playtimes.get(sid);
+    if (!q || !pt || !this.loaded.has(sid)) return;
+    this.rollDay(client);
+    const moved = addQuestProgress(q, "play", 1);
+    bankPlaytime(pt);
+    void this.saveFields(sid, { ...playtimeFields(pt), ...questFields(q) });
+    if (moved) client.send("quests", questView(q));
+  }
+
+  // A new UTC day for the session's quests and playtime clock: re-sends both when they rolled.
+  private rollDay(client: Client) {
+    const sid = client.sessionId;
+    const q = this.questStates.get(sid);
+    const pt = this.playtimes.get(sid);
+    if (!q || !pt) return;
+    const now = Date.now();
+    const quests = rollQuests(q, utcDay(now));
+    const clock = rollPlaytime(pt, now);
+    if (!quests && !clock) return;
+    void this.saveFields(sid, { ...questFields(q), ...playtimeFields(pt, now) });
+    client.send("quests", questView(q, now));
+    client.send("playtime", playtimeView(pt, now));
   }
 
   // `leaderboard` { boards: { rebirths|trophies|energy|playtime: [{ name, value }] }, ranks: { stat: n | null } }.
@@ -177,6 +272,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   async onLeave(client: Client, code?: number) {
     if (code === CloseCode.CONSENTED) {
       void this.stampLastSeen(client.sessionId);
+      void this.bankOnLeave(client.sessionId);
       this.forgetSession(client.sessionId);
       return;
     }
@@ -184,8 +280,18 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       await this.allowReconnection(client, RECONNECT_SECONDS);
     } catch {
       void this.stampLastSeen(client.sessionId);
+      void this.bankOnLeave(client.sessionId);
       this.forgetSession(client.sessionId);
     }
+  }
+
+  // Stores the time played today when a player really leaves (or switches identity). Call before
+  // forgetSession: the write reads the session's user id synchronously.
+  private async bankOnLeave(sessionId: string) {
+    const pt = this.playtimes.get(sessionId);
+    if (!pt) return;
+    bankPlaytime(pt);
+    await this.saveFields(sessionId, playtimeFields(pt));
   }
 
   // Server-clock "last seen" for a player who has really gone. Call before forgetSession.
@@ -208,6 +314,8 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     this.loaded.delete(sessionId);
     this.dailies.delete(sessionId);
     this.spinStates.delete(sessionId);
+    this.playtimes.delete(sessionId);
+    this.questStates.delete(sessionId);
   }
 
   private spinView(s: SpinState, now: number) {
@@ -232,19 +340,21 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
   // Stores a session's Daily Reward state. True when stored, or when there is nowhere to store it
   // (guest / no database: it lives in `dailies` for the session).
-  private async saveDaily(sessionId: string, s: DailyState): Promise<boolean> {
+  private saveDaily(sessionId: string, s: DailyState): Promise<boolean> {
+    return this.saveFields(sessionId, dailyFields(s));
+  }
+
+  // Writes server-owned fields (daily, playtime, quests) straight to the player's doc. True when
+  // stored, or when there is nowhere to store them (guest / no database: they live in memory).
+  private async saveFields(sessionId: string, fields: Partial<PlayerDoc>): Promise<boolean> {
     const userId = this.userIds.get(sessionId);
     const players = getPlayers();
     if (!userId || !players) return true;
     try {
-      await players.updateOne(
-        { _id: userId },
-        { $set: { ...dailyFields(s), updatedAt: new Date() }, $setOnInsert: { version: 1 } },
-        { upsert: true },
-      );
+      await players.updateOne({ _id: userId }, { $set: { ...fields, updatedAt: new Date() }, $setOnInsert: { version: 1 } }, { upsert: true });
       return true;
     } catch (err) {
-      console.warn("[WorldRoom] saveDaily failed", err);
+      console.warn("[WorldRoom] saveFields failed", err);
       return false;
     }
   }
@@ -262,6 +372,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     this.identified.add(client.sessionId);
     this.loaded.delete(client.sessionId); // no writes until the new identity's save is read
     this.spinStates.delete(client.sessionId); // nor spins
+    if (prev !== userId) void this.bankOnLeave(client.sessionId); // the old identity keeps its time today
     p.signedIn = !!userId;
 
     if (userId) {
@@ -320,7 +431,17 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     const daily = readDaily(doc);
     this.dailies.set(client.sessionId, daily);
     if (rollDaily(daily)) await this.saveDaily(client.sessionId, daily);
-    if (this.dailies.get(client.sessionId) === daily) client.send("daily", dailyView(daily));
+    if (this.dailies.get(client.sessionId) !== daily) return; // identity changed meanwhile
+    client.send("daily", dailyView(daily));
+
+    // Playtime Rewards + Daily Quests: today's clock and list (server clock).
+    const pt = readPlaytime(doc, now);
+    const quests = readQuests(doc);
+    this.playtimes.set(client.sessionId, pt);
+    this.questStates.set(client.sessionId, quests);
+    if (rollQuests(quests)) void this.saveFields(client.sessionId, questFields(quests));
+    client.send("playtime", playtimeView(pt, now));
+    client.send("quests", questView(quests, now));
     void this.sendLeaderboard(client);
   }
 }

@@ -36,6 +36,14 @@ export const PET_SLOTS_MAX = 50;
 export const GIFTS_MAX = 64;
 export const POTION_KINDS_MAX = 32;
 export const POTION_COUNT_MAX = 1e9;
+// Be a Dragon Ball (client state.js): fighters in the hotbar (keys 1-9, 0), in the Backpack, and
+// base slots a save may hold; the longest fighter name; the highest Speed stat and income.
+export const HOTBAR_MAX = 10;
+export const BACKPACK_MAX = 300;
+export const BASE_SLOTS_MAX = 80;
+export const FIGHTER_NAME_MAX = 24;
+export const FIGHTER_ID_MAX = 1e12;
+export const SLOT_LEVEL_MAX = 1000;
 // Daily Reward (client DAILY.days): days in one calendar cycle.
 export const DAILY_DAYS = 7;
 
@@ -55,9 +63,9 @@ export const SPIN_WEDGES = [
   { id: "hugePet", weight: 0.1 },
 ] as const;
 
-// Leaderboards (leaderboard.ts; client plaza.js boards): the saved doc fields ranked (Rebirth,
-// Wins, Power, Playtime), rows per board and how often the lists are re-read and re-sent.
-export const LEADERBOARD_STATS = ["rebirths", "trophies", "energy", "playtime"] as const;
+// Leaderboards (leaderboard.ts; client safe zone boards): the saved doc fields ranked (Top Money,
+// Top Speed, Top Rebirth, Top Playtime), rows per board and how often the lists are re-read and re-sent.
+export const LEADERBOARD_STATS = ["money", "speed", "rebirths", "playtime"] as const;
 export type LeaderboardStat = (typeof LEADERBOARD_STATS)[number];
 export const LEADERBOARD_SIZE = 10;
 export const LEADERBOARD_EVERY_MS = 60 * 1000;
@@ -69,3 +77,29 @@ export const ID_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 // The client's per-browser fallback id for players who are not signed in to Bloxity.
 // Guests are never persisted.
 export const GUEST_ID_PREFIX = "guest-";
+
+// --- Be a Dragon Ball windows (client src/ui/, fields in src/state.js) -------------------------
+// Index discoveries "mutation.fighter" (client roster.js indexKey, e.g. "default.kairo",
+// "golden.kairo"), at most INDEX_MAX (the client has 162 fighters x 11 tabs).
+export const INDEX_MAX = 4096;
+export const INDEX_KEY = /^[a-z0-9]{1,24}\.[a-z0-9]{1,24}$/;
+// Timed boosts (x2 Speed, x2 Luck) end at most this far ahead of now.
+export const BOOST_MAX_MS = 24 * 60 * 60 * 1000;
+
+// Playtime Rewards (playtime.ts; client PLAYTIME.rewards, same length): seconds online today
+// (server clock, UTC day) at which each reward unlocks.
+export const PLAYTIME_UNLOCKS = [30, 90, 180, 300, 600, 1200, 1800, 2400, 3000];
+
+// Daily Quests (quests.ts; client QUESTS.kinds): QUEST_SLOTS quests a UTC day, each a kind and a
+// goal from its list. `play` (minutes online) is counted by the server itself every
+// QUEST_TICK_MS; the others come from the client's `questEvent` (at most QUEST_EVENT_MAX a message).
+export const QUEST_SLOTS = 3;
+export const QUEST_KINDS = [
+  { kind: "hatch", goals: [5, 8, 12] },
+  { kind: "mutated", goals: [1, 2, 3] },
+  { kind: "sell", goals: [3, 6, 10] },
+  { kind: "play", goals: [10, 15, 20] },
+] as const;
+export type QuestKind = (typeof QUEST_KINDS)[number]["kind"];
+export const QUEST_EVENT_MAX = 50;
+export const QUEST_TICK_MS = 60 * 1000;

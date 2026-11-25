@@ -37,6 +37,27 @@ describe("progress", () => {
     assert.ok(!("hack" in doc));
   });
 
+  it("round-trips Be a Dragon Ball progress", async () => {
+    const fake = fakePlayers([{ _id: "u7", money: 25, speed: 2000, version: 1, updatedAt: new Date() } as any]);
+    __setPlayersForTest(fake);
+    const room = await colyseus.createRoom<WorldState>("world", {});
+    const c = await colyseus.connectTo(room, { userId: "u7", username: "Kai" });
+    let got: any = null;
+    c.onMessage("progress", (m: any) => (got = m));
+    fake.release();
+    await sleep(150);
+    assert.strictEqual(got?.money, 25);
+    assert.strictEqual(got?.speed, 2000);
+    const f = { id: 1, name: "Kairo", rarity: "Common", mutation: null as string | null, income: 600, look: {} };
+    c.send("saveProgress", { money: 99, speed: 2300, nextId: 2, inventory: [f], backpack: [], slots: [{ fighter: null, level: 1, stored: 0 }] });
+    await sleep(150);
+    const doc = fake.docs.get("u7")! as any;
+    assert.strictEqual(doc.money, 99);
+    assert.strictEqual(doc.speed, 2300);
+    assert.strictEqual(doc.inventory[0].name, "Kairo");
+    assert.strictEqual(doc.slots.length, 1);
+  });
+
   it("creates a new account's save and never saves a guest", async () => {
     const fake = fakePlayers();
     __setPlayersForTest(fake);
