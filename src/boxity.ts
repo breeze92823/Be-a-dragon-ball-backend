@@ -73,9 +73,21 @@ export async function verifyGameToken(token: unknown): Promise<VerifiedUser | nu
 // --- Room directory ("Open Rooms" on the game page) -------------------------------------------------
 export function installRoomReporter(): void {
   const base = env.MATCHMAKER_REPORT_URL;
-  if (!base || !reportToken() || !gameId()) return;
-  const url = `${base.replace(/\/$/, "")}/${gameId()}/rooms`;
+  const missing = [!base && "MATCHMAKER_REPORT_URL", !reportToken() && "BLOXITY_REPORT_TOKEN", !gameId() && "BLOXITY_GAME_ID"].filter(Boolean);
+  if (missing.length) {
+    // Without these Boxity cannot list this server's rooms ("Open Rooms" stays empty): say so in the logs.
+    console.log(`[boxity] room reporter off (not set: ${missing.join(", ")}). Fine locally; on Boxity hosting the "Open Rooms" list stays empty without them.`);
+    return;
+  }
+  const url = `${base!.replace(/\/$/, "")}/${gameId()}/rooms`;
   const podName = env.POD_NAME || env.HOSTNAME || "";
+  console.log(`[boxity] room reporter on: ${url} (pod "${podName}")`);
+  let last = ""; // the last outcome logged, so a steady state is silent but every change is visible
+  const note = (what: string) => {
+    if (what === last) return;
+    last = what;
+    console.log(`[boxity] room reporter: ${what}`);
+  };
   const tick = async () => {
     try {
       const listings = await matchMaker.query({});
@@ -90,9 +102,10 @@ export function installRoomReporter(): void {
         metadata: l.metadata || undefined,
       }));
       const players = rooms.reduce((n, r) => n + (r.clients || 0), 0);
-      await fetch(url, { method: "POST", headers: { "content-type": "application/json", ...auth() }, body: JSON.stringify({ podName, players, rooms }), signal: AbortSignal.timeout(4000) });
-    } catch {
-      // Best effort; the directory tolerates gaps.
+      const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json", ...auth() }, body: JSON.stringify({ podName, players, rooms }), signal: AbortSignal.timeout(4000) });
+      note(res.ok ? `reporting ${rooms.length} room(s), ${players} player(s)` : `refused with HTTP ${res.status} ${res.status === 401 || res.status === 403 ? "(check BLOXITY_REPORT_TOKEN / BLOXITY_GAME_ID)" : ""}`);
+    } catch (err) {
+      note(`failed: ${(err as Error)?.message ?? err}`); // the directory tolerates gaps; keep going
     }
   };
   setInterval(() => void tick(), 2000).unref();
