@@ -1,4 +1,5 @@
 import type { PlayerDoc, SavedFighter } from "./db.js";
+import { FUSE_RARITIES } from "./constants.js";
 
 // What this game tells Boxity about each player: profile stats ("Only in this game"), leaderboards
 // and badges. Read only from the saved doc (server-owned storage), never from a client packet.
@@ -13,7 +14,7 @@ const fighters = (d: Doc): SavedFighter[] => [
   ...(d.backpack ?? []),
   ...(d.slots ?? []).map((s) => s.fighter).filter((f): f is SavedFighter => !!f),
 ];
-const RANK = ["Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythical", "Secret", "Heavenly", "Eternal", "Celestial", "Divine", "Primal"];
+const RANK = FUSE_RARITIES as readonly string[]; // worst to best (the lane's zone order)
 const best = (d: Doc) => fighters(d).reduce((n, f) => Math.max(n, RANK.indexOf(f.rarity)), -1);
 
 export const STATS = [

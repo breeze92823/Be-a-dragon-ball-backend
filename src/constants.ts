@@ -119,8 +119,10 @@ export const QUEST_TICK_MS = 60 * 1000;
 // mutation with FUSE_MUTATION_CHANCE (rolled from FUSE_MUTATIONS by weight; inputs that all share
 // one mutation pass it on instead). The timer is FUSE_SECONDS[0] + FUSE_SECONDS[1] x the tier.
 export const FUSE_INPUTS = 4;
+// Worst to best = the client's lane zone order (config.js RARITY_ORDER), so a step up is always
+// worth more.
 export const FUSE_RARITIES = [
-  "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythical", "Secret", "Heavenly", "Eternal", "Celestial", "Divine", "Primal",
+  "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythical", "Secret", "Eternal", "Divine", "Heavenly", "Celestial", "Primal",
 ] as const;
 export const FUSE_STEPS = [
   { step: 0, weight: 60 },
