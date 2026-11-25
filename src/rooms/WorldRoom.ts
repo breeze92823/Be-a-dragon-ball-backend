@@ -8,7 +8,7 @@ import { claimDaily, dailyFields, dailyView, readDaily, rollDaily, utcDay, type 
 import { bankPlaytime, claimPlaytime, playtimeFields, playtimeView, readPlaytime, rollPlaytime, type PlaytimeState } from "../playtime.js";
 import { addQuestProgress, claimQuests, questFields, questView, readQuests, rerollQuest, rollQuests, type QuestState } from "../quests.js";
 import { fuseView, readFuse, readInputs, rollFusion, type FuseJob } from "../fuse.js";
-import { SPIN_PACKS, SPINS_MAX } from "../constants.js";
+import { OFFLINE_MAX_SECONDS, SPIN_PACKS, SPINS_MAX } from "../constants.js";
 import { applyAvatar, applyLoadout, applyPose } from "../presence.js";
 import { ranksOf, topBoards } from "../leaderboard.js";
 import { forgetBadges, loadOwnedBadges, markOffline, markOnline, trustClientIds, verifyAdToken, verifyGameToken, type VerifiedUser } from "../boxity.js";
@@ -72,7 +72,8 @@ export class WorldRoom extends Room<{ state: WorldState }> {
           { _id: userId },
           {
             // Display name comes from this connection's own PlayerState, not `msg`.
-            $set: { ...rest, username: p.username || "Player", updatedAt: new Date() },
+            // lastSeen is the server's clock (a client value is never trusted): offline earnings count from it.
+            $set: { ...rest, username: p.username || "Player", updatedAt: new Date(), lastSeen: Date.now() },
             ...(bestDistance !== undefined && { $max: { bestDistance } }),
             $setOnInsert: { version: 1 },
           },
@@ -577,7 +578,15 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     const spin = spinStateFrom(doc, now);
     this.spinStates.set(client.sessionId, spin);
     if (!doc) client.send("noProgress", { serverTime: now });
-    else client.send("progress", { ...(sanitizeProgress(doc) ?? {}), serverTime: now });
+    else {
+      // Offline earnings: how long the player was away on the server's clock (last save / leave), capped.
+      // The client adds income x this to its base pads (never straight to cash: the player collects it).
+      const since = typeof doc.lastSeen === "number" ? doc.lastSeen : doc.updatedAt instanceof Date ? doc.updatedAt.getTime() : now;
+      const offlineSeconds = Math.floor(Math.min(OFFLINE_MAX_SECONDS, Math.max(0, (now - since) / 1000)));
+      client.send("progress", { ...(sanitizeProgress(doc) ?? {}), offlineSeconds, serverTime: now });
+      // The away time is paid once: start the clock again from this load.
+      if (userId && players) players.updateOne({ _id: userId }, { $set: { lastSeen: now } }).catch(() => {});
+    }
     client.send("spins", this.spinView(spin, now));
     const job = readFuse(doc);
     this.fusions.set(client.sessionId, job);

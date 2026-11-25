@@ -92,6 +92,8 @@ export const INDEX_MAX = 4096;
 export const INDEX_KEY = /^[a-z0-9]{1,24}\.[a-z0-9]{1,24}$/;
 // Timed boosts (x2 Speed, x2 Luck) end at most this far ahead of now.
 export const BOOST_MAX_MS = 24 * 60 * 60 * 1000;
+// Offline earnings: the seconds away the server credits to the base pads, at most this (client BASE.offlineMaxHours).
+export const OFFLINE_MAX_SECONDS = 12 * 60 * 60;
 // Base Upgrade steps on your base's entrance sign (client BASE_BOARD.upgrade.prices.length).
 export const BASE_UPGRADE_STEPS = 5;
 
