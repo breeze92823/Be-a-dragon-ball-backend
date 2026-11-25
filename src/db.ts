@@ -60,6 +60,20 @@ export interface PlayerDoc {
   ptDay?: number; // UTC day of the playtime clock
   ptSecs?: number; // seconds online that day
   ptClaimed?: number[]; // claimed reward indexes that day
+  // Fuse Machine (fuse.ts): the running fusion, written by the server only.
+  fuse?: unknown;
+  // Shops (client state.js): base skin, treadmills, dragon balls, x2 Money boost.
+  baseSkin?: string; // equipped base skin ("" = Default; a mutation id from indexClaimed)
+  treadmills?: string[]; // owned treadmill ids (client TREADMILLS)
+  treadmill?: string; // equipped treadmill ("" = the starter one)
+  balls?: string[]; // owned dragon ball ids (client BALLS)
+  ball?: string; // equipped dragon ball ("" = the starter one)
+  moneyBoostUntil?: number; // epoch ms the x2 Money boost ends
+  // Base boards (client src/base/board.js): Base Upgrade steps, Auto Collect owned + on, Upgrade Max All owned.
+  baseLevel?: number;
+  autoCollect?: boolean;
+  autoCollectOn?: boolean;
+  upgradeMax?: boolean;
   quests?: { day: number; list: { kind: any; goal: number; n: number; rerolled: boolean }[]; claimed: boolean };
   version: number;
   updatedAt: Date;

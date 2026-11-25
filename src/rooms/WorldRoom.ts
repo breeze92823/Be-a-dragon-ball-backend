@@ -7,6 +7,8 @@ import { accrue, rollWedge, spinStateFrom, type SpinState } from "../spin.js";
 import { claimDaily, dailyFields, dailyView, readDaily, rollDaily, utcDay, type DailyState } from "../daily.js";
 import { bankPlaytime, claimPlaytime, playtimeFields, playtimeView, readPlaytime, rollPlaytime, type PlaytimeState } from "../playtime.js";
 import { addQuestProgress, claimQuests, questFields, questView, readQuests, rerollQuest, rollQuests, type QuestState } from "../quests.js";
+import { fuseView, readFuse, readInputs, rollFusion, type FuseJob } from "../fuse.js";
+import { SPIN_PACKS, SPINS_MAX } from "../constants.js";
 import { applyAvatar, applyLoadout, applyPose } from "../presence.js";
 import { ranksOf, topBoards } from "../leaderboard.js";
 
@@ -48,6 +50,8 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   // save. Like the Daily Reward, guests / serverless sessions keep them for the connection only.
   private playtimes = new Map<string, PlaytimeState>();
   private questStates = new Map<string, QuestState>();
+  // sessionId -> the running Fuse Machine job (fuse.ts) or null, read with the save.
+  private fusions = new Map<string, FuseJob | null>();
 
   messages = {
     // Debounced push of the client's whole progress. Upserts, so a first save creates the document.
@@ -150,6 +154,9 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       if (pt) client.send("playtime", playtimeView(pt, now));
       if (q) client.send("quests", questView(q, now));
       if (d) client.send("daily", dailyView(d, now));
+      if (this.fusions.has(client.sessionId)) client.send("fuse", fuseView(this.fusions.get(client.sessionId) ?? null, now));
+      const sp = this.spinStates.get(client.sessionId);
+      if (sp) client.send("spins", this.spinView(sp, now));
     },
     // The client's countdown reached the next UTC day: new quests + a fresh playtime clock.
     dayRefresh: (client: Client) => {
@@ -168,6 +175,51 @@ export class WorldRoom extends Room<{ state: WorldState }> {
       const wedge = rollWedge();
       client.send("spinResult", { ok: true, id: wedge.id, ...this.spinView(s, now) });
       await this.saveSpins(client.sessionId, s);
+    },
+    // Spin packs bought with $ on the client (never premium currency): `buySpins` { pack } adds
+    // SPIN_PACKS[pack] spins and answers `spins`.
+    buySpins: async (client: Client, msg: { pack?: unknown }) => {
+      const s = this.spinStates.get(client.sessionId);
+      const n = Number.isInteger(msg?.pack) ? SPIN_PACKS[msg.pack as number] : undefined;
+      if (!s || !n) return;
+      const now = Date.now();
+      accrue(s, now);
+      s.spins = Math.min(SPINS_MAX, s.spins + n);
+      client.send("spins", this.spinView(s, now));
+      await this.saveSpins(client.sessionId, s);
+    },
+    // Fuse Machine: `fuseStart` { inputs: [{ rarity, mutation }] x FUSE_INPUTS } rolls the result
+    // here and starts the timer; `fuseClaim` hands it over once ready. Both answer `fuseResult`
+    // { ok, action, reason?: "loading" | "busy" | "bad" | "wait" | "none" | "save", result?, ...view }.
+    fuseStart: async (client: Client, msg: { inputs?: unknown }) => {
+      const sid = client.sessionId;
+      const now = Date.now();
+      if (!this.loaded.has(sid) || !this.fusions.has(sid)) return client.send("fuseResult", { ok: false, action: "start", reason: "loading" });
+      const running = this.fusions.get(sid);
+      if (running) return client.send("fuseResult", { ok: false, action: "start", reason: "busy", ...fuseView(running, now) });
+      const inputs = readInputs(msg?.inputs);
+      if (!inputs) return client.send("fuseResult", { ok: false, action: "start", reason: "bad", ...fuseView(null, now) });
+      const job = rollFusion(inputs, now);
+      this.fusions.set(sid, job);
+      if (!(await this.saveFields(sid, { fuse: job }))) {
+        this.fusions.set(sid, null);
+        return client.send("fuseResult", { ok: false, action: "start", reason: "save", ...fuseView(null, now) });
+      }
+      client.send("fuseResult", { ok: true, action: "start", ...fuseView(job, now) });
+    },
+    fuseClaim: async (client: Client) => {
+      const sid = client.sessionId;
+      const now = Date.now();
+      const job = this.fusions.get(sid);
+      if (!this.loaded.has(sid) || job === undefined) return client.send("fuseResult", { ok: false, action: "claim", reason: "loading" });
+      if (!job) return client.send("fuseResult", { ok: false, action: "claim", reason: "none", ...fuseView(null, now) });
+      if (now < job.readyAt) return client.send("fuseResult", { ok: false, action: "claim", reason: "wait", ...fuseView(job, now) });
+      this.fusions.set(sid, null);
+      if (!(await this.saveFields(sid, { fuse: null }))) {
+        this.fusions.set(sid, job);
+        return client.send("fuseResult", { ok: false, action: "claim", reason: "save", ...fuseView(job, now) });
+      }
+      client.send("fuseResult", { ok: true, action: "claim", result: { rarity: job.rarity, mutation: job.mutation, pick: job.pick }, ...fuseView(null, now) });
     },
     // The sender's race, relayed through the roster so everyone draws them on the distance bar and
     // podium: { racing, distance (studs this race) }, a few times a second while racing.
@@ -316,6 +368,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     this.spinStates.delete(sessionId);
     this.playtimes.delete(sessionId);
     this.questStates.delete(sessionId);
+    this.fusions.delete(sessionId);
   }
 
   private spinView(s: SpinState, now: number) {
@@ -372,6 +425,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     this.identified.add(client.sessionId);
     this.loaded.delete(client.sessionId); // no writes until the new identity's save is read
     this.spinStates.delete(client.sessionId); // nor spins
+    this.fusions.delete(client.sessionId); // nor fusions
     if (prev !== userId) void this.bankOnLeave(client.sessionId); // the old identity keeps its time today
     p.signedIn = !!userId;
 
@@ -426,6 +480,9 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     if (!doc) client.send("noProgress", { serverTime: now });
     else client.send("progress", { ...(sanitizeProgress(doc) ?? {}), serverTime: now });
     client.send("spins", this.spinView(spin, now));
+    const job = readFuse(doc);
+    this.fusions.set(client.sessionId, job);
+    client.send("fuse", fuseView(job, now));
 
     // Daily Reward: today's day unlocks on join (server clock), then the client gets the calendar.
     const daily = readDaily(doc);

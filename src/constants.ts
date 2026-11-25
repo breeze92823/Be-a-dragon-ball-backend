@@ -53,15 +53,18 @@ export const SPIN_EVERY_MS = 15 * 60 * 1000;
 export const SPIN_CAP = 5;
 export const SPIN_START = 1;
 export const SPINS_MAX = 1e6;
-// The wedges' prizes and odds (weights in %). Ids match the client's SPIN.wedges; the client
-// decides what each prize is, the server only which one is won.
+// The wedges' prizes and odds (weights in %), in wheel order. Ids match the client's SPIN.wedges;
+// the client decides what each prize is, the server only which one is won.
 export const SPIN_WEDGES = [
-  { id: "doubleWins", weight: 35 },
-  { id: "wins50", weight: 25 },
-  { id: "luck", weight: 35 },
-  { id: "wins250", weight: 4.9 },
-  { id: "hugePet", weight: 0.1 },
+  { id: "cash", weight: 30 },
+  { id: "luck", weight: 10 },
+  { id: "epicFighter", weight: 5 },
+  { id: "speed", weight: 20 },
+  { id: "rareFighter", weight: 15 },
+  { id: "money", weight: 20 },
 ] as const;
+// Spin packs the client sells for $ (never premium currency): `buySpins` { pack } adds this many.
+export const SPIN_PACKS = [3, 6] as const;
 
 // Leaderboards (leaderboard.ts; client safe zone boards): the saved doc fields ranked (Top Money,
 // Top Speed, Top Rebirth, Top Playtime), rows per board and how often the lists are re-read and re-sent.
@@ -85,6 +88,8 @@ export const INDEX_MAX = 4096;
 export const INDEX_KEY = /^[a-z0-9]{1,24}\.[a-z0-9]{1,24}$/;
 // Timed boosts (x2 Speed, x2 Luck) end at most this far ahead of now.
 export const BOOST_MAX_MS = 24 * 60 * 60 * 1000;
+// Base Upgrade steps on your base's entrance sign (client BASE_BOARD.upgrade.prices.length).
+export const BASE_UPGRADE_STEPS = 5;
 
 // Playtime Rewards (playtime.ts; client PLAYTIME.rewards, same length): seconds online today
 // (server clock, UTC day) at which each reward unlocks.
@@ -103,3 +108,34 @@ export const QUEST_KINDS = [
 export type QuestKind = (typeof QUEST_KINDS)[number]["kind"];
 export const QUEST_EVENT_MAX = 50;
 export const QUEST_TICK_MS = 60 * 1000;
+
+// Fuse Machine (fuse.ts; client FUSE in config.js): FUSE_INPUTS fighters go in, one comes out
+// after a timer. The outcome tier is the inputs' average rarity (FUSE_RARITIES index, rounded)
+// plus a step rolled from FUSE_STEPS (weights in %), capped at the top rarity. The result has a
+// mutation with FUSE_MUTATION_CHANCE (rolled from FUSE_MUTATIONS by weight; inputs that all share
+// one mutation pass it on instead). The timer is FUSE_SECONDS[0] + FUSE_SECONDS[1] x the tier.
+export const FUSE_INPUTS = 4;
+export const FUSE_RARITIES = [
+  "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythical", "Secret", "Heavenly", "Eternal", "Celestial", "Divine", "Primal",
+] as const;
+export const FUSE_STEPS = [
+  { step: 0, weight: 60 },
+  { step: 1, weight: 32 },
+  { step: 2, weight: 8 },
+] as const;
+export const FUSE_MUTATION_CHANCE = 0.25;
+export const FUSE_MUTATIONS = [
+  { id: "golden", name: "Golden", weight: 30 },
+  { id: "ice", name: "Ice", weight: 22 },
+  { id: "shadow", name: "Shadow", weight: 15 },
+  { id: "jade", name: "Jade", weight: 12 },
+  { id: "candy", name: "Candy", weight: 9 },
+  { id: "lava", name: "Lava", weight: 6 },
+  { id: "crimson", name: "Crimson", weight: 3 },
+  { id: "lightning", name: "Lightning", weight: 1.8 },
+  { id: "destruction", name: "Destruction", weight: 0.9 },
+  { id: "mastered", name: "Mastered Aura", weight: 0.3 },
+] as const;
+export const FUSE_SECONDS = [20, 20] as const;
+// Roster pick for the result: an index the client maps onto that rarity's fighters (mod length).
+export const FUSE_PICK_MAX = 10_000;

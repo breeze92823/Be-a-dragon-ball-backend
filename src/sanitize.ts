@@ -2,7 +2,7 @@ import {
   CURRENCY_MAX, REBIRTHS_MAX, DISTANCE_MAX, PLAY_SECONDS_MAX, OWNED_MAX, PETS_MAX, PET_TIERS_MAX,
   PET_SLOTS_MAX, GIFTS_MAX, POTION_KINDS_MAX, POTION_COUNT_MAX, ID_PATTERN,
   HOTBAR_MAX, BACKPACK_MAX, BASE_SLOTS_MAX, FIGHTER_NAME_MAX, FIGHTER_ID_MAX, SLOT_LEVEL_MAX,
-  INDEX_KEY, INDEX_MAX, BOOST_MAX_MS,
+  INDEX_KEY, INDEX_MAX, BOOST_MAX_MS, BASE_UPGRADE_STEPS,
 } from "./constants.js";
 import type { PlayerDoc, SavedFighter, SavedLook, SavedPet, SavedSlot } from "./db.js";
 
@@ -175,6 +175,22 @@ export function sanitizeProgress(raw: unknown): Partial<PlayerDoc> | null {
   const boostCap = Date.now() + BOOST_MAX_MS;
   if (finite(raw.speedBoostUntil)) out.speedBoostUntil = clampInt(raw.speedBoostUntil, boostCap);
   if (finite(raw.luckBoostUntil)) out.luckBoostUntil = clampInt(raw.luckBoostUntil, boostCap);
+  if (finite(raw.moneyBoostUntil)) out.moneyBoostUntil = clampInt(raw.moneyBoostUntil, boostCap);
+
+  // Shops: equipped base skin (must be unlocked when the save carries indexClaimed), owned +
+  // equipped treadmill and dragon ball ("" = the starter one; the equipped id must be owned).
+  if (raw.baseSkin === "") out.baseSkin = "";
+  else if (isId(raw.baseSkin) && (!out.indexClaimed || out.indexClaimed.includes(raw.baseSkin))) out.baseSkin = raw.baseSkin;
+  for (const [listKey, idKey] of [["treadmills", "treadmill"], ["balls", "ball"]] as const) {
+    if (raw[listKey] !== undefined) out[listKey] = sanitizeIds(raw[listKey], 64);
+    const id = raw[idKey];
+    const owned = out[listKey];
+    if (id === "") out[idKey] = "";
+    else if (isId(id) && (!owned || owned.includes(id))) out[idKey] = id;
+  }
+  // Base boards: Base Upgrade steps (client BASE_BOARD.upgrade.prices) and the bought toggles.
+  if (finite(raw.baseLevel)) out.baseLevel = clampInt(raw.baseLevel, BASE_UPGRADE_STEPS);
+  for (const k of ["autoCollect", "autoCollectOn", "upgradeMax"] as const) if (typeof raw[k] === "boolean") out[k] = raw[k] as boolean;
   if (isObject(raw.settings)) {
     const s = raw.settings;
     out.settings = { lowGfx: s.lowGfx === true, noVfx: s.noVfx === true, muteMusic: s.muteMusic === true, names: s.names !== false };
