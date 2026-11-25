@@ -80,6 +80,8 @@ jobs:
         with:
           context: .
           push: true
+          # Links the GHCR package to this repo so GITHUB_TOKEN may write to it.
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           tags: ${{ env.REGISTRY }}/${{ env.OWNER }}/${{ env.GAME_ID }}-server:${{ steps.channel.outputs.channel }}-${{ github.sha }}
 
       # roomSize = players per room (WorldRoom's maxClients, ROOM_MAX_CLIENTS in src/constants.ts);

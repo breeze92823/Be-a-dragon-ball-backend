@@ -30,6 +30,7 @@ export const PlayerState = schema(
     look: t.string().default(""), // equipped Boxity item ids + proportions as JSON: draws the skin where the character kit is off
     held: t.string().default(""), // look of the fighter carried in front of the avatar, same format, "" = none
     avatar: t.string().default(""), // Boxity outfit key (the character kit dresses a rig with it), "" = default
+    handle: t.string().default(""), // the verified Boxity username (the permanent handle): what Boxity matches friends by in playerJoined()
     uid: t.string().default(""), // verified Boxity account id ("" = guest): the others match chat bubbles to this player with it
   },
   "PlayerState",

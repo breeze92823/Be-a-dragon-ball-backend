@@ -77,7 +77,10 @@ describe("progress", () => {
     await sleep(150);
     guest.send("saveProgress", { trophies: 99 });
     await sleep(150);
-    assert.strictEqual(fake.docs.size, 1, "a guest is never written");
+    // (Another test's dropped player can still stamp its own "last seen" here after its 20 s reconnect window,
+    // so check the guest's id, not the document count.)
+    assert.ok(!fake.docs.has("guest-abc"), "a guest is never written");
+    assert.ok(fake.docs.has("new1"));
     assert.strictEqual(room.state.players.get(guest.sessionId)?.signedIn, false);
   });
 

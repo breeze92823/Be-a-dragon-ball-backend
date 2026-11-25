@@ -42,6 +42,7 @@ const auth = () => ({ authorization: `Bearer ${reportToken()}` });
 export interface VerifiedUser {
   id: string; // the Boxity user id (_id)
   username: string;
+  handle: string; // the permanent Boxity username (username above is the display name)
   pfp: string;
   carriedFrom: string[]; // Boxity guest ids this browser played as before signing in
   outfitKey: string; // the platform-verified outfit key (what the player wears), "" when absent
@@ -58,6 +59,7 @@ export async function verifyGameToken(token: unknown): Promise<VerifiedUser | nu
     return {
       id: String(u._id).slice(0, 128),
       username: String(u.displayName || u.username || "Player"),
+      handle: String(u.username || "").slice(0, 64),
       pfp: typeof u.pfp === "string" ? u.pfp : "",
       outfitKey: typeof u.outfitKey === "string" && /^[A-Za-z0-9_.-]{1,2900}$/.test(u.outfitKey) ? u.outfitKey : "",
       carriedFrom: Array.isArray(json.carriedFrom) ? json.carriedFrom.filter((s: unknown) => typeof s === "string").slice(0, 5) : [],

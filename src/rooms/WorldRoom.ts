@@ -362,7 +362,10 @@ export class WorldRoom extends Room<{ state: WorldState }> {
   private async resolveIdentity(sessionId: string, opts?: { token?: unknown; userId?: unknown; username?: unknown }): Promise<string> {
     this.verified.delete(sessionId);
     const own = this.state.players.get(sessionId);
-    if (own) own.uid = "";
+    if (own) {
+      own.uid = "";
+      own.handle = "";
+    }
     if (typeof opts?.token === "string" && opts.token) {
       const u = await verifyGameToken(opts.token);
       if (u) {
@@ -371,6 +374,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
         if (p) {
           p.username = sanitizeName(u.username);
           if (u.pfp) p.pfp = sanitizePfp(u.pfp);
+          p.handle = u.handle;
           p.uid = u.id; // public: the Boxity id chat messages carry
           if (u.outfitKey) p.avatar = u.outfitKey; // prefer the platform-verified look
         }
