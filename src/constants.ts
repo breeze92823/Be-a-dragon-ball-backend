@@ -1,5 +1,9 @@
-// Keep in step with the client's src/config.js by hand.
-export const ROOM_MAX_CLIENTS = 50;
+// Players per room (the deploy sends it as `roomSize`): the safe zone has one base per player, so this is
+// also the number of bases (client SAFE_ZONE.bases.plots). Keep in step with the client's src/config.js by hand.
+export const ROOM_MAX_CLIENTS = 5;
+export const BASE_COUNT = ROOM_MAX_CLIENTS;
+// Slots of a base the others see (the client's BASE.slots).
+export const PRESENCE_SLOTS_MAX = 10;
 
 // Longest accepted strings.
 export const NAME_MAX = 64;

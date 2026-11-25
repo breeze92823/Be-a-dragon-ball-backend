@@ -59,7 +59,7 @@ const LABEL = /^[A-Za-z][A-Za-z ]{0,23}$/; // rarity / mutation names ("Common",
 const color = (v: unknown, fallback: string) => (typeof v === "string" && COLOR.test(v) ? v : fallback);
 const small = (v: unknown) => (finite(v) ? clampInt(v, 9) : 0);
 
-function sanitizeLook(raw: unknown): SavedLook {
+export function sanitizeLook(raw: unknown): SavedLook {
   const l = isObject(raw) ? raw : {};
   return {
     gi: color(l.gi, "#ff7a1a"),

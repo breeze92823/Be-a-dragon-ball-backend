@@ -1,6 +1,6 @@
 import { Room, Client, CloseCode } from "colyseus";
 import { WorldState, PlayerState } from "./schema/WorldState.js";
-import { DISTANCE_MAX, GUEST_ID_PREFIX, LEADERBOARD_EVERY_MS, NAME_MAX, PFP_MAX_LEN, QUEST_TICK_MS, RECONNECT_SECONDS, ROOM_MAX_CLIENTS } from "../constants.js";
+import { BASE_COUNT, DISTANCE_MAX, GUEST_ID_PREFIX, LEADERBOARD_EVERY_MS, NAME_MAX, PFP_MAX_LEN, QUEST_TICK_MS, RECONNECT_SECONDS, ROOM_MAX_CLIENTS } from "../constants.js";
 import { getPlayers, type PlayerDoc } from "../db.js";
 import { sanitizeProgress } from "../sanitize.js";
 import { accrue, rollWedge, spinStateFrom, type SpinState } from "../spin.js";
@@ -11,6 +11,7 @@ import { fuseView, readFuse, readInputs, rollFusion, type FuseJob } from "../fus
 import { SPIN_PACKS, SPINS_MAX } from "../constants.js";
 import { applyAvatar, applyLoadout, applyPose } from "../presence.js";
 import { ranksOf, topBoards } from "../leaderboard.js";
+import { forgetBadges, loadOwnedBadges, markOffline, markOnline, trustClientIds, verifyAdToken, verifyGameToken, type VerifiedUser } from "../boxity.js";
 
 function sanitizeName(raw: unknown): string {
   return typeof raw === "string" ? raw.slice(0, NAME_MAX) : "";
@@ -246,12 +247,29 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     },
     // Re-states identity after a login/logout that happens AFTER join (a guest who signs in
     // mid-session). The server answers with progress/noProgress for the new identity.
-    identify: (client: Client, msg: { username?: string; userId?: string; pfp?: string }) => {
+    identify: async (client: Client, msg: { username?: string; userId?: string; pfp?: string; token?: string }) => {
       const p = this.state.players.get(client.sessionId);
       if (!p) return;
       if (typeof msg?.username === "string") p.username = sanitizeName(msg.username);
       if (typeof msg?.pfp === "string") p.pfp = sanitizePfp(msg.pfp);
-      if (typeof msg?.userId === "string") this.setUserId(client, p, msg.userId);
+      // A new identity (sign in / out mid-session) is only taken from a verified Boxity token.
+      if (typeof msg?.token === "string" || typeof msg?.userId === "string") {
+        const id = await this.resolveIdentity(client.sessionId, msg);
+        if (this.state.players.get(client.sessionId) === p) this.setUserId(client, p, id);
+      }
+    },
+    // Rewarded ad (Legion.SDK.ads.showRewarded): Boxity checks the single-use token, then one extra
+    // Dragon Spin is added. Answers `spins` (or `adResult` { ok: false } when refused).
+    adSpin: async (client: Client, msg: { rewardToken?: unknown }) => {
+      const s = this.spinStates.get(client.sessionId);
+      if (!s) return client.send("adResult", { ok: false, reason: "loading" });
+      if (!(await verifyAdToken(msg?.rewardToken)) && !trustClientIds()) return client.send("adResult", { ok: false, reason: "refused" });
+      const now = Date.now();
+      accrue(s, now);
+      s.spins = Math.min(SPINS_MAX, s.spins + 1);
+      client.send("spins", this.spinView(s, now));
+      client.send("adResult", { ok: true });
+      await this.saveSpins(client.sessionId, s);
     },
   };
 
@@ -307,7 +325,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     }
   }
 
-  onJoin(client: Client, options?: { username?: string; userId?: string; pfp?: string; pose?: unknown; loadout?: unknown; avatar?: string }) {
+  async onJoin(client: Client, options?: { username?: string; userId?: string; token?: string; pfp?: string; pose?: unknown; loadout?: unknown; avatar?: string }) {
     const p = new PlayerState();
     p.username = sanitizeName(options?.username);
     p.pfp = sanitizePfp(options?.pfp);
@@ -316,7 +334,51 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     applyLoadout(p, options?.loadout);
     applyAvatar(p, options);
     this.state.players.set(client.sessionId, p);
-    this.setUserId(client, p, typeof options?.userId === "string" ? options.userId : "");
+    this.assignBase(client, p, (options as { base?: unknown } | undefined)?.base);
+    const id = await this.resolveIdentity(client.sessionId, options);
+    if (this.state.players.get(client.sessionId) === p) this.setUserId(client, p, id);
+  }
+
+  // One base per player (the client's safe zone has BASE_COUNT plots). A player gets the base it asked
+  // for (`base` in the join options: the one it already built its world around) when it is free, else
+  // the lowest free one; it is told with `base` { index } and the roster carries it (`PlayerState.base`).
+  private assignBase(client: Client, p: PlayerState, want: unknown) {
+    const taken = new Set<number>();
+    this.state.players.forEach((o, sid) => {
+      if (sid !== client.sessionId && o.base >= 0) taken.add(o.base);
+    });
+    let index = Number.isInteger(want) && (want as number) >= 0 && (want as number) < BASE_COUNT && !taken.has(want as number) ? (want as number) : -1;
+    for (let i = 0; index < 0 && i < BASE_COUNT; i++) if (!taken.has(i)) index = i;
+    p.base = index; // -1 only if the room is over capacity (cannot happen: maxClients = BASE_COUNT)
+    client.send("base", { index });
+  }
+
+  // Boxity-verified identities of this room's sessions (name + guest saves they carry over).
+  private verified = new Map<string, VerifiedUser>();
+
+  // The account id of a join / identify: a Boxity token checked with the platform (its verified name
+  // and picture replace the client's), or -- only with TRUST_CLIENT_IDS (local dev, tests) -- the id
+  // the client sent. Anything else is a guest ("").
+  private async resolveIdentity(sessionId: string, opts?: { token?: unknown; userId?: unknown; username?: unknown }): Promise<string> {
+    this.verified.delete(sessionId);
+    const own = this.state.players.get(sessionId);
+    if (own) own.uid = "";
+    if (typeof opts?.token === "string" && opts.token) {
+      const u = await verifyGameToken(opts.token);
+      if (u) {
+        this.verified.set(sessionId, u);
+        const p = this.state.players.get(sessionId);
+        if (p) {
+          p.username = sanitizeName(u.username);
+          if (u.pfp) p.pfp = sanitizePfp(u.pfp);
+          p.uid = u.id; // public: the Boxity id chat messages carry
+          if (u.outfitKey) p.avatar = u.outfitKey; // prefer the platform-verified look
+        }
+        return u.id;
+      }
+      return "";
+    }
+    return trustClientIds() && typeof opts?.userId === "string" ? opts.userId : "";
   }
 
   // A deliberate `room.leave()` closes with CONSENTED -- drop the player at once. Anything
@@ -360,6 +422,12 @@ export class WorldRoom extends Room<{ state: WorldState }> {
 
   // Drops a session's per-connection bookkeeping.
   private forgetSession(sessionId: string) {
+    const id = this.userIds.get(sessionId);
+    if (id) {
+      markOffline(id);
+      forgetBadges(id);
+    }
+    this.verified.delete(sessionId);
     this.state.players.delete(sessionId);
     this.userIds.delete(sessionId);
     this.identified.delete(sessionId);
@@ -412,8 +480,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     }
   }
 
-  // Client-trusted Bloxity user id (guest ids are dropped, see GUEST_ID_PREFIX). A forged id can
-  // only read/overwrite the SENDER's own save (there is no cross-player read in `saveProgress`).
+  // The verified Boxity account id (see resolveIdentity; guest ids are dropped, see GUEST_ID_PREFIX).
   // Called from both onJoin and `identify`; answers with progress / noProgress / serverError.
   private setUserId(client: Client, p: PlayerState, raw: string) {
     let userId = raw.slice(0, 128);
@@ -445,14 +512,41 @@ export class WorldRoom extends Room<{ state: WorldState }> {
           }
         }
       }
+      if (prev && prev !== userId) {
+        markOffline(prev);
+        forgetBadges(prev);
+      }
       this.userIds.set(client.sessionId, userId);
+      markOnline(userId);
+      void loadOwnedBadges(userId);
     } else {
       // No identity: stop persisting for this connection. (The client flushes a final
       // saveProgress under the OLD id before sending `identify`.)
+      if (prev) {
+        markOffline(prev);
+        forgetBadges(prev);
+      }
       this.userIds.delete(client.sessionId);
     }
 
     void this.loadProgress(client, userId, p);
+  }
+
+  // A Boxity player who signs in to an account with no progress here brings the save of the guest
+  // they played as (verify's `carriedFrom`): the first unused guest save is copied once, then marked
+  // used so it can never seed a second account. An account that already has progress is untouched.
+  private async carryOverGuest(sessionId: string, userId: string, players: NonNullable<ReturnType<typeof getPlayers>>): Promise<PlayerDoc | null> {
+    for (const guestId of this.verified.get(sessionId)?.carriedFrom ?? []) {
+      if (guestId === userId) continue;
+      const g = await players.findOne({ _id: guestId });
+      if (!g || (g as any).carriedTo) continue;
+      const { _id, carriedTo, ...rest } = g as any;
+      const claimed = await players.updateOne({ _id: guestId, carriedTo: { $exists: false } } as any, { $set: { carriedTo: userId } });
+      if (!claimed.modifiedCount) continue;
+      await players.updateOne({ _id: userId }, { $set: { ...rest, updatedAt: new Date() }, $setOnInsert: { version: 1 } }, { upsert: true });
+      return (await players.findOne({ _id: userId })) ?? null;
+    }
+    return null;
   }
 
   // Sends the saved doc to just this client so it can hydrate its state ("progress"), or
@@ -464,6 +558,7 @@ export class WorldRoom extends Room<{ state: WorldState }> {
     if (userId && players) {
       try {
         doc = await players.findOne({ _id: userId });
+        if (!doc) doc = await this.carryOverGuest(client.sessionId, userId, players);
       } catch (err) {
         console.warn("[WorldRoom] loadProgress failed", err);
         client.send("serverError", {});

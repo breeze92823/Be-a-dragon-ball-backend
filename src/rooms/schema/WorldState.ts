@@ -21,7 +21,16 @@ export const PlayerState = schema(
     partner: t.string().default(""),
     pets: t.string().default(""), // equipped pets "kind:tier,kind:tier"
     world: t.string().default(""), // the world the player is in (client WORLDS id), "" = the start world
-    avatar: t.string().default(""), // Bloxity look JSON { equipped, proportions, skin }, "" = default
+    form: t.string().default(""), // how the others draw the player: "human" (default), "orb" (rolling the lane) or "fighter" (a hatched fighter running home)
+    ball: t.string().default(""), // equipped Dragon Ball id (the orb's skin), "" = the starter one
+    fighter: t.string().default(""), // look of the fighter being run home: "gi,pants,hair,skin,belt,boots,style,stance,cape" (colours #rrggbb)
+    base: t.int32().default(-1), // the base (plot index) the server assigned this player: 0..BASE_COUNT-1, -1 = none yet
+    multi: t.float32().default(1), // the base's Cash Multi, shown on its owner card
+    baseSlots: t.string().default(""), // the fighters on the base's slots: looks (see `fighter`) joined by "|", "" = an empty slot
+    look: t.string().default(""), // equipped Boxity item ids + proportions as JSON: draws the skin where the character kit is off
+    held: t.string().default(""), // look of the fighter carried in front of the avatar, same format, "" = none
+    avatar: t.string().default(""), // Boxity outfit key (the character kit dresses a rig with it), "" = default
+    uid: t.string().default(""), // verified Boxity account id ("" = guest): the others match chat bubbles to this player with it
   },
   "PlayerState",
 );
